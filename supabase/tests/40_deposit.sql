@@ -112,3 +112,16 @@ reset request.jwt.claim.sub;
 reset role;
 select t_eq((select paid from dues where member_id = :'anid' and month = '2027-02-01'), greatest(:an_due - :an_bal, 0), 'W2 hoàn trả → ký quỹ đã nạp giảm đúng số tiền hoàn');
 select t_eq((select paid < amount from dues where member_id = :'anid' and month = '2027-02-01')::text, (:an_bal > 0)::text, 'W3 đã hoàn tiền thì không còn báo "đủ"');
+-- 008: bắt đầu thử thách giữa tháng → ký quỹ tính theo ngày còn lại của cả tháng
+update test_clock set t = '2027-03-01 08:00';
+select process_penalties();
+select t_eq((select required from dues where member_id = :'lanid' and month = '2027-03-01'), 260000, 'S1 tháng 3 bắt đầu từ đầu tháng: đủ 260.000đ');
+select (select count(*) from generate_series('2027-03-15'::date, '2027-03-31'::date, interval '1 day') g(d) where extract(isodow from g.d)::int = any(s.workdays) and not (g.d::date = any(s.off_dates)))::int as left_days, month_fee_days('2027-03-01') as all_days from settings s where id = 1 \gset
+set role authenticated;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-00000000a0a0';
+select admin_update_settings('{"challenge_start": "2027-03-15"}') is null;
+reset request.jwt.claim.sub;
+reset role;
+select t_eq((select required from dues where member_id = :'lanid' and month = '2027-03-01'), (round(260000.0 * :left_days / :all_days / 1000) * 1000)::int, 'S2 đổi ngày bắt đầu 15/3 → ký quỹ = 260.000 × ngày còn lại ÷ ngày cả tháng');
+select t_eq((select member_days || '/' || month_days from dues where member_id = :'lanid' and month = '2027-03-01'), :left_days || '/' || :all_days, 'S3 lưu số ngày mới để hiển thị');
+select t_eq((select amount <= required and paid <= amount from dues where member_id = :'lanid' and month = '2027-03-01')::text, 'true', 'S4 số phải nạp và đã nạp không vượt ký quỹ mới');
