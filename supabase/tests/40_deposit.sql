@@ -89,3 +89,26 @@ reset role;
 select t_eq((select sum(amount) from fund_tx)::int, 0, 'G3 chi đúng bằng số dư quỹ → quỹ về 0');
 select t_eq(((select sum(amount) from wallet_tx where status='confirmed') + (select sum(amount) from fund_tx))::int,
   ((select sum(amount) from wallet_tx where status='confirmed' and type in ('deposit','adjustment')) - (select coalesce(-sum(amount),0) from fund_tx where type = 'expense'))::int, 'G4 cân đối sau chi: ví + quỹ = tiền nộp − tiền đã chi');
+-- 007: hoàn trả tiền thì giảm ký quỹ đã nạp
+update test_clock set t = '2027-02-01 08:00';
+select process_penalties();
+select id as anid from members where name = 'Anh An' \gset
+select amount as an_due from dues where member_id = :'anid' and month = '2027-02-01' \gset
+set role authenticated;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-00000000a0a0';
+select admin_wallet_entry(:'anid', 'deposit', :an_due + 20000000, 'CK đủ ký quỹ') is null;
+reset request.jwt.claim.sub;
+reset role;
+select t_eq((select paid from dues where member_id = :'anid' and month = '2027-02-01'), :an_due, 'W1 nạp đủ → ký quỹ đủ');
+set role authenticated;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-00000000a0a0';
+reset request.jwt.claim.sub;
+reset role;
+select wallet_balance(:'anid') as an_bal \gset
+set role authenticated;
+set request.jwt.claim.sub = '00000000-0000-0000-0000-00000000a0a0';
+select admin_wallet_entry(:'anid', 'adjustment', -(:an_bal), 'Hoàn trả tiền: test') is null;
+reset request.jwt.claim.sub;
+reset role;
+select t_eq((select paid from dues where member_id = :'anid' and month = '2027-02-01'), greatest(:an_due - :an_bal, 0), 'W2 hoàn trả → ký quỹ đã nạp giảm đúng số tiền hoàn');
+select t_eq((select paid < amount from dues where member_id = :'anid' and month = '2027-02-01')::text, (:an_bal > 0)::text, 'W3 đã hoàn tiền thì không còn báo "đủ"');
